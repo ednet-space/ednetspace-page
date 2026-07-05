@@ -21,10 +21,17 @@
 <!-- marked -->
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
 
-<!-- docx + FileSaver + html2canvas (for DOCX export) -->
-<script src="https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.js"></script>
+<!-- FileSaver + html2canvas (for DOCX export) -->
 <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<!-- docx: loaded as an ES module via jsDelivr's resolved-entry endpoint, since the
+     package's raw file layout changes between versions and a hardcoded build path
+     is fragile. This guarantees window.__docxLib is set correctly before use. -->
+<script type="module">
+  import * as docxLib from "https://cdn.jsdelivr.net/npm/docx@8.5.0/+esm";
+  window.__docxLib = docxLib;
+  window.dispatchEvent(new Event('docxlib:ready'));
+</script>
 
 <style>
   :root{
@@ -352,19 +359,35 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
 
   marked.setOptions({ gfm:true, breaks:false });
 
-  const CODE_OPEN = '\u0001', MATH_OPEN = '\u0002';
+  const CODE_OPEN = '\uE000', MATH_OPEN = '\uE001', INLINE_CODE_HIDE = '\uE002';
 
   function escapeHtml(s){
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  // ---------- Preprocessing: protect code + math from markdown/emphasis mangling ----------
+  // --- UNIVERSAL DECODER FOR DOCX / SOURCE STRINGS ---
+  const __entityDecoderEl = document.createElement('textarea');
+  function decodeHtmlEntities(text){
+    if (!text) return '';
+    let current = text;
+    for (let i = 0; i < 6; i++){
+      __entityDecoderEl.innerHTML = current;
+      const next = __entityDecoderEl.value;
+      if (next === current) break;
+      current = next;
+    }
+    return current;
+  }
+
   function extractBlocks(markdown){
     const codeBlocks = [];
     const mathBlocks = [];
+    const temporaryInlineCode = [];
     let text = markdown.replace(/\r\n/g, '\n');
 
-    // Fenced code blocks (``` or ~~~)
+    text = decodeHtmlEntities(text);
+
+    // 1. Protect fenced code blocks
     text = text.replace(/^([ \t]{0,3})(`{3,}|~{3,})[ \t]*([^\n`]*)\n([\s\S]*?)\n[ \t]{0,3}\2[ \t]*$/gm,
       (m, indent, fence, lang, code) => {
         const idx = codeBlocks.length;
@@ -372,32 +395,42 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
         return `${CODE_OPEN}CODEBLOCK${idx}${CODE_OPEN}`;
       });
 
-    // Display math $$ ... $$
-    text = text.replace(/\$\$([\s\S]+?)\$\$/g, (m, expr) => {
+    // 2. PROTECT INLINE CODE SPANS (Fixes image_366343.png by shielding R '$' operators)
+    text = text.replace(/`([^`\n]+)`/g, (m, content) => {
+      const idx = temporaryInlineCode.length;
+      temporaryInlineCode.push(content);
+      return `${INLINE_CODE_HIDE}INLINECODE${idx}${INLINE_CODE_HIDE}`;
+    });
+
+    // 3. Extract math blocks safely now without false-positives from code strings
+    text = text.replace(/\$$([\s\S]+?)\$\$/g, (m, expr) => {
       const idx = mathBlocks.length;
       mathBlocks.push({ expr: expr.trim(), display: true });
       return `${MATH_OPEN}MATHBLOCK${idx}${MATH_OPEN}`;
     });
 
-    // Display math \[ ... \]  (common from ChatGPT/Gemini)
     text = text.replace(/\\\[([\s\S]+?)\\\]/g, (m, expr) => {
       const idx = mathBlocks.length;
       mathBlocks.push({ expr: expr.trim(), display: true });
       return `${MATH_OPEN}MATHBLOCK${idx}${MATH_OPEN}`;
     });
 
-    // Inline math $ ... $ (single line, non-empty, no unescaped $ inside)
     text = text.replace(/\$([^\n$]+?)\$/g, (m, expr) => {
       const idx = mathBlocks.length;
       mathBlocks.push({ expr: expr.trim(), display: false });
       return `${MATH_OPEN}MATHBLOCK${idx}${MATH_OPEN}`;
     });
 
-    // Inline math \( ... \)  (common from ChatGPT/Gemini)
+    // 4. Extract parenthetical inline math (Fixes image_366e86.png)
     text = text.replace(/\\\(([^\n]+?)\\\)/g, (m, expr) => {
       const idx = mathBlocks.length;
       mathBlocks.push({ expr: expr.trim(), display: false });
       return `${MATH_OPEN}MATHBLOCK${idx}${MATH_OPEN}`;
+    });
+
+    // 5. Restore protected inline code spans so marked can parse them perfectly
+    text = text.replace(new RegExp(`${INLINE_CODE_HIDE}INLINECODE(\\d+)${INLINE_CODE_HIDE}`, 'g'), (m, idx) => {
+      return '`' + temporaryInlineCode[+idx] + '`';
     });
 
     return { text, codeBlocks, mathBlocks };
@@ -431,7 +464,6 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
     return html;
   }
 
-  // ---------- Live preview ----------
   let renderTimer = null;
   function scheduleRender(){
     clearTimeout(renderTimer);
@@ -453,10 +485,39 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
   editor.addEventListener('input', scheduleRender);
   renderPreview();
 
-  // ---------- Copy button ----------
+  function mathNodesOf(root){
+    return Array.from(root.querySelectorAll('.katex-display, .katex')).filter(el => {
+      if (el.classList.contains('katex-display')) return true;
+      return !el.closest('.katex-display');
+    });
+  }
+
+  async function buildPortableHTML(){
+    const liveNodes = mathNodesOf(preview);
+    if (!liveNodes.length) return preview.innerHTML;
+    const clone = preview.cloneNode(true);
+    const cloneNodes = mathNodesOf(clone);
+    for (let i = 0; i < liveNodes.length; i++){
+      try{
+        const canvas = await html2canvas(liveNodes[i], { backgroundColor: null, scale: 3, logging: false });
+        const img = document.createElement('img');
+        img.src = canvas.toDataURL('image/png');
+        img.alt = 'equation';
+        img.style.verticalAlign = 'middle';
+        img.width = Math.round(canvas.width / 3);
+        img.height = Math.round(canvas.height / 3);
+        if (cloneNodes[i]) cloneNodes[i].replaceWith(img);
+      }catch(e){ console.error('math rasterize failed', e); }
+    }
+    return clone.innerHTML;
+  }
+
   copyBtn.addEventListener('click', async () => {
+    const originalLabel = copyBtn.textContent;
+    copyBtn.disabled = true;
+    copyBtn.textContent = 'Copying…';
     try{
-      const html = preview.innerHTML;
+      const html = await buildPortableHTML();
       const plain = preview.innerText;
       if (window.ClipboardItem){
         const item = new ClipboardItem({
@@ -476,6 +537,9 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
     }catch(e){
       console.error(e);
       setStatus('Could not copy automatically — try selecting the preview text manually.');
+    }finally{
+      copyBtn.disabled = false;
+      copyBtn.textContent = originalLabel;
     }
   });
 
@@ -485,9 +549,26 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
 
   // ================= DOCX EXPORT =================
 
-  const { Document, Packer, Paragraph, TextRun, ImageRun, ExternalHyperlink,
-          Table, TableRow, TableCell, HeadingLevel, AlignmentType, BorderStyle,
-          WidthType } = window.docx;
+  function getDocxLib(){
+    if (window.__docxLib) return Promise.resolve(window.__docxLib);
+    return new Promise((resolve, reject) => {
+      const onReady = () => { window.removeEventListener('docxlib:ready', onReady); resolve(window.__docxLib); };
+      window.addEventListener('docxlib:ready', onReady);
+      setTimeout(() => {
+        window.removeEventListener('docxlib:ready', onReady);
+        if (window.__docxLib) resolve(window.__docxLib);
+        else reject(new Error('The docx library did not load in time. Check your connection and try again.'));
+      }, 15000);
+    });
+  }
+
+  let Document, Packer, Paragraph, TextRun, ImageRun, ExternalHyperlink,
+      Table, TableRow, TableCell, HeadingLevel, AlignmentType, BorderStyle, WidthType;
+
+  function bindDocxLib(lib){
+    ({ Document, Packer, Paragraph, TextRun, ImageRun, ExternalHyperlink,
+       Table, TableRow, TableCell, HeadingLevel, AlignmentType, BorderStyle, WidthType } = lib);
+  }
 
   function dataUrlToUint8Array(dataUrl){
     const base64 = dataUrl.split(',')[1];
@@ -495,6 +576,11 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
     const bytes = new Uint8Array(binary.length);
     for (let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
     return bytes;
+  }
+
+  function xmlSafe(text){
+    if (text === undefined || text === null) return '';
+    return String(text).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '');
   }
 
   async function renderMathImages(mathBlocks){
@@ -517,7 +603,6 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
       try{ html = katex.renderToString(mb.expr, { throwOnError:false, displayMode: mb.display }); }
       catch(e){ html = escapeHtml(mb.expr); }
       container.innerHTML = html;
-      // eslint-disable-next-line no-await-in-loop
       const canvas = await html2canvas(container, { backgroundColor:'#ffffff', scale:3, logging:false });
       const dataUrl = canvas.toDataURL('image/png');
       const buffer = dataUrlToUint8Array(dataUrl);
@@ -530,48 +615,53 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
     return images;
   }
 
-  function textWithMathToRuns(text, opts, mathImages){
+  function textWithMathToRuns(text, opts, mathImages, codeBlocks){
     const runs = [];
     if (text === undefined || text === null) return runs;
-    const re = new RegExp(`${MATH_OPEN}MATHBLOCK(\\d+)${MATH_OPEN}`,'g');
+    const re = new RegExp(`${MATH_OPEN}MATHBLOCK(\\d+)${MATH_OPEN}|${CODE_OPEN}CODEBLOCK(\\d+)${CODE_OPEN}`,'g');
     let lastIndex = 0, m;
     while ((m = re.exec(text)) !== null){
       if (m.index > lastIndex){
-        runs.push(new TextRun({ text: text.slice(lastIndex, m.index), ...opts }));
+        const chunk = xmlSafe(decodeHtmlEntities(text.slice(lastIndex, m.index)));
+        if (chunk) runs.push(new TextRun(Object.assign({ text: chunk }, opts)));
       }
-      const img = mathImages[+m[1]];
-      if (img){
-        runs.push(new ImageRun({ data: img.buffer, transformation: { width: img.width, height: img.height } }));
+      if (m[1] !== undefined){
+        const img = mathImages[+m[1]];
+        if (img) runs.push(new ImageRun({ data: img.buffer, transformation: { width: img.width, height: img.height } }));
+      } else if (m[2] !== undefined && codeBlocks){
+        const block = codeBlocks[+m[2]];
+        if (block) runs.push(new TextRun(Object.assign({ text: xmlSafe(decodeHtmlEntities(block.code)), font:'JetBrains Mono', shading:{ fill:'F1EEE6' } }, opts)));
       }
       lastIndex = re.lastIndex;
     }
     if (lastIndex < text.length){
-      runs.push(new TextRun({ text: text.slice(lastIndex), ...opts }));
+      const chunk = xmlSafe(decodeHtmlEntities(text.slice(lastIndex)));
+      if (chunk) runs.push(new TextRun(Object.assign({ text: chunk }, opts)));
     }
     return runs;
   }
 
-  function inlineTokensToRuns(tokens, opts, mathImages){
+  function inlineTokensToRuns(tokens, opts, mathImages, codeBlocks){
     opts = opts || {};
     let runs = [];
     if (!tokens) return runs;
     for (const t of tokens){
       switch(t.type){
         case 'strong':
-          runs = runs.concat(inlineTokensToRuns(t.tokens, Object.assign({}, opts, {bold:true}), mathImages));
+          runs = runs.concat(inlineTokensToRuns(t.tokens, Object.assign({}, opts, {bold:true}), mathImages, codeBlocks));
           break;
         case 'em':
-          runs = runs.concat(inlineTokensToRuns(t.tokens, Object.assign({}, opts, {italics:true}), mathImages));
+          runs = runs.concat(inlineTokensToRuns(t.tokens, Object.assign({}, opts, {italics:true}), mathImages, codeBlocks));
           break;
         case 'del':
-          runs = runs.concat(inlineTokensToRuns(t.tokens, Object.assign({}, opts, {strike:true}), mathImages));
+          runs = runs.concat(inlineTokensToRuns(t.tokens, Object.assign({}, opts, {strike:true}), mathImages, codeBlocks));
           break;
         case 'codespan':
-          runs.push(new TextRun(Object.assign({ text:t.text, font:'JetBrains Mono', shading:{ fill:'F1EEE6' } }, opts)));
+          runs.push(new TextRun(Object.assign({ text:xmlSafe(decodeHtmlEntities(t.text)), font:'JetBrains Mono', shading:{ fill:'F1EEE6' } }, opts)));
           break;
         case 'link': {
-          const label = t.tokens ? inlineTokensToRuns(t.tokens, opts, mathImages)
-            : [new TextRun(Object.assign({ text:t.text||t.href, color:'2F4858', underline:{} }, opts))];
+          const label = t.tokens ? inlineTokensToRuns(t.tokens, opts, mathImages, codeBlocks)
+            : [new TextRun(Object.assign({ text:xmlSafe(decodeHtmlEntities(t.text||t.href)), color:'2F4858', underline:{} }, opts))];
           runs.push(new ExternalHyperlink({ link:t.href, children: label }));
           break;
         }
@@ -579,20 +669,20 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
           runs.push(new TextRun({ text:'', break:1 }));
           break;
         case 'image':
-          runs.push(new TextRun(Object.assign({ text:`[image: ${t.text||t.href}]`, italics:true }, opts)));
+          runs.push(new TextRun(Object.assign({ text:xmlSafe(`[image: ${decodeHtmlEntities(t.text||t.href)}]`), italics:true }, opts)));
           break;
         case 'html':
           break;
         case 'escape':
-          runs = runs.concat(textWithMathToRuns(t.text, opts, mathImages));
+          runs = runs.concat(textWithMathToRuns(t.text, opts, mathImages, codeBlocks));
           break;
         case 'text':
-          if (t.tokens) runs = runs.concat(inlineTokensToRuns(t.tokens, opts, mathImages));
-          else runs = runs.concat(textWithMathToRuns(t.text, opts, mathImages));
+          if (t.tokens) runs = runs.concat(inlineTokensToRuns(t.tokens, opts, mathImages, codeBlocks));
+          else runs = runs.concat(textWithMathToRuns(t.text, opts, mathImages, codeBlocks));
           break;
         default:
-          if (t.tokens) runs = runs.concat(inlineTokensToRuns(t.tokens, opts, mathImages));
-          else if (t.text !== undefined) runs = runs.concat(textWithMathToRuns(t.text, opts, mathImages));
+          if (t.tokens) runs = runs.concat(inlineTokensToRuns(t.tokens, opts, mathImages, codeBlocks));
+          else if (t.text !== undefined) runs = runs.concat(textWithMathToRuns(t.text, opts, mathImages, codeBlocks));
       }
     }
     return runs;
@@ -602,7 +692,7 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
     const lines = block.code.split('\n');
     const runs = [];
     lines.forEach((line, i) => {
-      runs.push(new TextRun({ text: line.length ? line : ' ', font:'JetBrains Mono', size:19 }));
+      runs.push(new TextRun({ text: xmlSafe(decodeHtmlEntities(line.length ? line : ' ')), font:'JetBrains Mono', size:19 }));
       if (i < lines.length - 1) runs.push(new TextRun({ text:'', break:1 }));
     });
     return [ new Paragraph({
@@ -618,7 +708,7 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
     }) ];
   }
 
-  function listToParagraphs(listToken, level, mathImages){
+  function listToParagraphs(listToken, level, mathImages, codeBlocks){
     const children = [];
     let idx = (listToken.start && listToken.start !== '') ? Number(listToken.start) : 1;
     for (const item of listToken.items){
@@ -633,33 +723,40 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
       children.push(new Paragraph({
         indent: { left: 360 + level*360 },
         spacing: { after:80 },
-        children: [ new TextRun({ text: prefix }) ].concat(inlineTokensToRuns(inline, {}, mathImages))
+        children: [ new TextRun({ text: prefix }) ].concat(inlineTokensToRuns(inline, {}, mathImages, codeBlocks))
       }));
-      nestedLists.forEach(nl => { children.push.apply(children, listToParagraphs(nl, level+1, mathImages)); });
+      nestedLists.forEach(nl => { children.push.apply(children, listToParagraphs(nl, level+1, mathImages, codeBlocks)); });
     }
     return children;
   }
 
-  function tableTokenToTable(token, mathImages){
+  function safeRuns(runs){
+    return (runs && runs.length) ? runs : [ new TextRun({ text: '' }) ];
+  }
+
+  function tableTokenToTable(token, mathImages, codeBlocks){
+    const colCount = token.header.length;
     const headerRow = new TableRow({
       tableHeader:true,
       children: token.header.map(cell => new TableCell({
         shading: { fill:'7A2E2E' },
-        children: [ new Paragraph({ children: inlineTokensToRuns(cell.tokens, {bold:true, color:'FFFFFF'}, mathImages) }) ]
+        children: [ new Paragraph({ children: safeRuns(inlineTokensToRuns(cell.tokens, {bold:true, color:'FFFFFF'}, mathImages, codeBlocks)) }) ]
       }))
     });
-    const rows = token.rows.map(row => new TableRow({
-      children: row.map(cell => new TableCell({
-        children: [ new Paragraph({ children: inlineTokensToRuns(cell.tokens, {}, mathImages) }) ]
-      }))
-    }));
+    const rows = token.rows.map(row => {
+      const cells = row.slice(0, colCount);
+      while (cells.length < colCount) cells.push({ tokens: [] });
+      return new TableRow({
+        children: cells.map(cell => new TableCell({
+          children: [ new Paragraph({ children: safeRuns(inlineTokensToRuns(cell.tokens, {}, mathImages, codeBlocks)) }) ]
+        }))
+      });
+    });
     return new Table({
       width: { size:100, type: WidthType.PERCENTAGE },
       rows: [headerRow].concat(rows)
     });
   }
-
-  const HEADING_MAP = {};
 
   function buildDocxChildren(tokens, codeBlocks, mathBlocks, mathImages){
     const children = [];
@@ -670,28 +767,60 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
           children.push(new Paragraph({
             heading: HeadingLevel[levelKey],
             spacing: { before:260, after:120 },
-            children: inlineTokensToRuns(token.tokens, {}, mathImages)
+            children: inlineTokensToRuns(token.tokens, {}, mathImages, codeBlocks)
           }));
           break;
         }
         case 'paragraph': {
-          const raw = (token.text||'').trim();
-          const codeMatch = raw.match(new RegExp(`^${CODE_OPEN}CODEBLOCK(\\d+)${CODE_OPEN}$`));
-          const mathMatch = raw.match(new RegExp(`^${MATH_OPEN}MATHBLOCK(\\d+)${MATH_OPEN}$`));
-          if (codeMatch){
-            children.push.apply(children, codeBlockParagraphs(codeBlocks[+codeMatch[1]]));
-          } else if (mathMatch && mathBlocks[+mathMatch[1]].display){
-            const img = mathImages[+mathMatch[1]];
+          const raw = token.text || '';
+          const hasCode = raw.includes(CODE_OPEN + 'CODEBLOCK');
+          const hasDisplayMath = raw.includes(MATH_OPEN + 'MATHBLOCK');
+
+          if (!hasCode && !hasDisplayMath) {
             children.push(new Paragraph({
-              alignment: AlignmentType.CENTER,
-              spacing: { before:140, after:140 },
-              children: [ new ImageRun({ data: img.buffer, transformation:{ width:img.width, height:img.height } }) ]
+              spacing: { after: 180 },
+              children: inlineTokensToRuns(token.tokens, {}, mathImages, codeBlocks)
             }));
           } else {
-            children.push(new Paragraph({
-              spacing: { after:180 },
-              children: inlineTokensToRuns(token.tokens, {}, mathImages)
-            }));
+            let currentInlineTokens = [];
+            for (const subToken of (token.tokens || [])) {
+              const subText = subToken.text || '';
+              const codeMatch = subText.match(new RegExp(`${CODE_OPEN}CODEBLOCK(\\d+)${CODE_OPEN}`));
+              const mathMatch = subText.match(new RegExp(`${MATH_OPEN}MATHBLOCK(\\d+)${MATH_OPEN}`));
+
+              if (codeMatch) {
+                if (currentInlineTokens.length > 0) {
+                  children.push(new Paragraph({
+                    spacing: { after: 180 },
+                    children: inlineTokensToRuns(currentInlineTokens, {}, mathImages, codeBlocks)
+                  }));
+                  currentInlineTokens = [];
+                }
+                children.push.apply(children, codeBlockParagraphs(codeBlocks[+codeMatch[1]]));
+              } else if (mathMatch && mathBlocks[+mathMatch[1]].display) {
+                if (currentInlineTokens.length > 0) {
+                  children.push(new Paragraph({
+                    spacing: { after: 180 },
+                    children: inlineTokensToRuns(currentInlineTokens, {}, mathImages, codeBlocks)
+                  }));
+                  currentInlineTokens = [];
+                }
+                const img = mathImages[+mathMatch[1]];
+                children.push(new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  spacing: { before: 140, after: 140 },
+                  children: [ new ImageRun({ data: img.buffer, transformation: { width: img.width, height: img.height } }) ]
+                }));
+              } else {
+                currentInlineTokens.push(subToken);
+              }
+            }
+            if (currentInlineTokens.length > 0) {
+              children.push(new Paragraph({
+                spacing: { after: 180 },
+                children: inlineTokensToRuns(currentInlineTokens, {}, mathImages, codeBlocks)
+              }));
+            }
           }
           break;
         }
@@ -702,17 +831,17 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
                 indent: { left:480 },
                 spacing: { after:160 },
                 border: { left: { style:BorderStyle.SINGLE, size:12, color:'7A2E2E', space:8 } },
-                children: inlineTokensToRuns(bt.tokens || bt, {italics:true, color:'5A5248'}, mathImages)
+                children: inlineTokensToRuns(bt.tokens || bt, {italics:true, color:'5A5248'}, mathImages, codeBlocks)
               }));
             }
           }
           break;
         }
         case 'list':
-          children.push.apply(children, listToParagraphs(token, 0, mathImages));
+          children.push.apply(children, listToParagraphs(token, 0, mathImages, codeBlocks));
           break;
         case 'table':
-          children.push(tableTokenToTable(token, mathImages));
+          children.push(tableTokenToTable(token, mathImages, codeBlocks));
           children.push(new Paragraph({ text:'', spacing:{ after:120 } }));
           break;
         case 'hr':
@@ -730,7 +859,7 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
           if (token.tokens){
             children.push.apply(children, buildDocxChildren(token.tokens, codeBlocks, mathBlocks, mathImages));
           } else if (token.text){
-            children.push(new Paragraph({ children:[ new TextRun(token.text) ] }));
+            children.push(new Paragraph({ children:[ new TextRun({ text: xmlSafe(decodeHtmlEntities(token.text)) }) ] }));
           }
       }
     }
@@ -748,40 +877,36 @@ $$\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}$$
     setStatus('Typesetting your document…');
     try{
       const raw = editor.value;
-      if (!raw.trim()){
-        setStatus('Nothing to convert yet — paste some markdown first.');
-        downloadBtn.disabled = false;
-        return;
-      }
       const { text, codeBlocks, mathBlocks } = extractBlocks(raw);
-      const mathImages = await renderMathImages(mathBlocks);
-
+      
       const tokens = marked.lexer(text);
-      const children = buildDocxChildren(tokens, codeBlocks, mathBlocks, mathImages);
+      const mathImages = await renderMathImages(mathBlocks);
+      const lib = await getDocxLib(); 
+      bindDocxLib(lib);
+
+      const docChildren = buildDocxChildren(tokens, codeBlocks, mathBlocks, mathImages);
 
       const doc = new Document({
-        styles: {
-          default: {
-            document: { run: { font:'Georgia', size:22 } }
-          }
-        },
-        sections: [{ properties:{}, children }]
+        sections: [{
+          properties: {},
+          children: docChildren
+        }]
       });
 
       const blob = await Packer.toBlob(doc);
       const filename = titleFromMarkdown(raw) + '.docx';
       saveAs(blob, filename);
-      setStatus('Downloaded ' + filename);
-    }catch(err){
-      console.error(err);
-      setStatus('Something went wrong generating the file — open the console for details.');
-    }finally{
+
+      setStatus('Ready.');
+    } catch(e) {
+      console.error(e);
+      setStatus('Export failed. Check console structural mismatch errors.');
+    } finally {
       downloadBtn.disabled = false;
     }
   }
 
   downloadBtn.addEventListener('click', generateDocx);
-
 })();
 </script>
 </body>
