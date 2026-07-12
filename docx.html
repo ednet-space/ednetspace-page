@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LLM Markdown to Clean DOCX Converter</title>
-    <!-- Tailwind CSS for sleek UI styling -->
+    <title>LLM Markdown to Image-Math DOCX Converter</title>
+    <!-- Tailwind CSS for styling -->
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <!-- Marked.js to parse Markdown to HTML -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <!-- MathJax for rendering formulas in preview -->
+    <!-- MathJax Configuration for SVG Rendering -->
     <script>
         window.MathJax = {
             tex: {
@@ -20,12 +20,11 @@
                 ignoreHtmlClass: 'tex2jax_ignore',
                 processHtmlClass: 'tex2jax_process'
             },
-            svg: { fontCache: 'global' }
+            svg: { fontCache: 'none' }
         };
     </script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
     <style>
-        /* Typography fixes for the preview and copy engine */
         .preview-content h1 { font-size: 1.8rem; font-weight: bold; margin-top: 1.25rem; margin-bottom: 0.5rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25rem; }
         .preview-content h2 { font-size: 1.4rem; font-weight: bold; margin-top: 1rem; margin-bottom: 0.4rem; }
         .preview-content h3 { font-size: 1.2rem; font-weight: bold; margin-top: 0.75rem; margin-bottom: 0.3rem; }
@@ -37,110 +36,100 @@
         .preview-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
         .preview-content th, .preview-content td { border: 1px solid #d1d5db; padding: 0.5rem; text-align: left; }
         .preview-content th { background-color: #f3f4f6; }
-        /* Style for code blocks in preview */
-        .preview-content pre { background-color: #f3f4f6; padding: 0.75rem; border-radius: 0.375rem; overflow-x: auto; font-family: monospace; margin: 0.75rem 0; font-size: 0.9rem; }
-        .preview-content code { background-color: #f3f4f6; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.9rem; }
+        .preview-content pre { background-color: #f3f4f6; padding: 0.75rem; border-radius: 0.375rem; overflow-x: auto; font-family: monospace; margin: 0.75rem 0; }
+        .preview-content code { background-color: #f3f4f6; padding: 0.125rem 0.25rem; border-radius: 0.25rem; font-family: monospace; }
+        .preview-content mjx-container { display: inline-block; margin: 0 0.25rem; vertical-align: middle; }
+        .preview-content mjx-container[display="true"] { display: block; text-align: center; margin: 1rem 0; }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-800 min-h-screen flex flex-col">
-
     <header class="bg-white border-b border-gray-200 py-4 px-6 shadow-sm">
         <div class="max-w-6xl mx-auto flex justify-between items-center">
-            <h1 class="text-xl font-bold text-indigo-600 flex items-center gap-2">
-                <span>📝</span> LLM Markdown to Clean Word Document
+            <h1 class="text-xl font-bold text-emerald-600 flex items-center gap-2">
+                <span>📑</span> Markdown + Math to Image-DOCX Engine
             </h1>
-            <span class="text-xs bg-gray-100 text-gray-500 font-medium px-2.5 py-1 rounded-full">Robust Math Edition</span>
+            <span class="text-xs bg-emerald-50 text-emerald-600 font-medium px-2.5 py-1 rounded-full">Pro Edition v4</span>
         </div>
     </header>
 
     <main class="max-w-6xl w-full mx-auto p-4 md:p-6 flex-grow flex flex-col gap-6">
-        <!-- Input Space -->
         <div class="flex flex-col gap-2">
             <label for="markdown-input" class="font-semibold text-sm text-gray-700 flex justify-between items-center">
-                <span>Paste your AI output here:</span>
-                <button onclick="clearInput()" class="text-xs text-red-500 hover:underline">Clear Area</button>
+                <span>Input Markdown Content:</span>
+                <button onclick="clearInput()" class="text-xs text-red-500 hover:underline">Clear</button>
             </label>
-            <textarea id="markdown-input" class="w-full h-64 p-4 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm bg-white" placeholder="Paste your markdown containing standard text, tables, code blocks, or math equations here..."></textarea>
+            <textarea id="markdown-input" class="w-full h-64 p-4 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 font-mono text-sm bg-white" placeholder="Paste your text here..."></textarea>
         </div>
 
-        <!-- Action Control Bar -->
         <div class="flex flex-wrap items-center justify-between gap-4 bg-white p-4 border border-gray-200 rounded-lg shadow-sm">
             <div class="text-sm text-gray-500">
-                Live document formatting engine (HTML-safe isolation)
+                Safe local document compilation with proportional unit-scaling filters.
             </div>
             <div class="flex gap-3">
-                <button onclick="copyToClipboard()" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-4 py-2 rounded-md text-sm transition shadow-sm cursor-pointer flex items-center gap-2">
-                    📋 Copy Formatted Text
-                </button>
-                <button onclick="downloadAsDocx()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2 rounded-md text-sm transition shadow-sm cursor-pointer flex items-center gap-2">
-                    💾 Download .docx File
+                <button id="download-btn" onclick="downloadAsDocx()" class="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-5 py-2 rounded-md text-sm transition shadow-sm cursor-pointer flex items-center gap-2">
+                    💾 Download Word Document (.docx)
                 </button>
             </div>
         </div>
 
-        <!-- Live Preview Area -->
         <div class="flex flex-col gap-2 flex-grow">
-            <h3 class="font-semibold text-sm text-gray-700">Live Clean Preview (Selectable & Clean copyable):</h3>
-            <div id="preview" class="preview-content tex2jax_process w-full flex-grow min-h-[300px] p-6 border border-gray-300 rounded-lg shadow-sm bg-white overflow-y-auto">
-                <p class="text-gray-400 italic">Your document output will instantly show up cleanly formatted here...</p>
+            <h3 class="font-semibold text-sm text-gray-700">Live Visual Format Preview:</h3>
+            <div id="preview" class="preview-content tex2jax_process w-full flex-grow min-h-[250px] p-6 border border-gray-300 rounded-lg shadow-sm bg-white overflow-y-auto">
+                <p class="text-gray-400 italic">Your formatted document structures will display live here...</p>
             </div>
         </div>
     </main>
-
-    <footer class="bg-white border-t border-gray-200 py-4 text-center text-xs text-gray-400">
-        Processed locally entirely in your browser. Files never touch a server.
-    </footer>
 
     <script>
         const inputArea = document.getElementById('markdown-input');
         const previewArea = document.getElementById('preview');
 
-        inputArea.addEventListener('input', updatePreview);
-
-        // Uses custom HTML markup tags so Marked treats them as raw blocks and never breaks them
-        function processMarkdownWithMath(text) {
-            const mathBlocks = [];
-            
-            // Regex safely flags all standard math styles ($$, $, \[, \()
-            const mathRegex = /(\$\$[\s\S]+?\$\$|\$[\s\S]+?\$|\\\[[\s\S]+?\\\]|\\\( [\s\S]+?\\\)|\\\(.*?\\\))/g;
-            
-            let placeholderText = text.replace(mathRegex, (match) => {
-                const index = mathBlocks.length;
-                mathBlocks.push(match);
-                // Return a harmless HTML element that Marked won't modify
-                return `<math-p data-idx="${index}"></math-p>`;
-            });
-
-            let htmlContent = marked.parse(placeholderText);
-
-            // Swap our custom HTML elements back to the clean math formulas
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = htmlContent;
-            
-            const placeholders = tempDiv.querySelectorAll('math-p');
-            placeholders.forEach(el => {
-                const idx = el.getAttribute('data-idx');
-                if (idx !== null) {
-                    // Replace the node with raw text content to preserve LaTeX control tokens
-                    const textNode = document.createTextNode(mathBlocks[idx]);
-                    el.parentNode.replaceChild(textNode, el);
+        // --- AST TOKENIZER ---
+        const customMathExtension = {
+            name: 'customMath',
+            level: 'inline',
+            start(src) { return src.match(/[\[\(]/)?.index; }, 
+            tokenizer(src, tokens) {
+                // Display equations [ H_0:\beta_1=0 ]
+                const displayMatch = /^\[\s*([A-Za-z0-9_=\+\-\^\s\\\{\}\.:,\<\>\(\)]+)\s*\]/.exec(src);
+                if (displayMatch) {
+                    const content = displayMatch[1];
+                    if (content.includes('=') || content.includes('\\') || content.includes('^') || content.includes('_')) {
+                        return {
+                            type: 'customMath',
+                            raw: displayMatch[0],
+                            text: '$$\n' + content.trim() + '\n$$'
+                        };
+                    }
                 }
-            });
+                
+                // Parentheses tracking like ((R^2=.28)) or (\beta=7.12)
+                const parenMatch = /^(\({1,2})\s*([A-Za-z0-9_=\+\-\^\s\\\{\}\.:,\<\>]+)\s*(\){1,2})/.exec(src);
+                if (parenMatch) {
+                    const content = parenMatch[2];
+                    if (content.includes('\\') || content.includes('^') || content.includes('_') || /^([a-zA-Z])\s*=/.test(content)) {
+                        return {
+                            type: 'customMath',
+                            raw: parenMatch[0],
+                            text: '$' + content.trim() + '$'
+                        };
+                    }
+                }
+                return;
+            },
+            renderer(token) { return token.text; }
+        };
 
-            return tempDiv.innerHTML;
-        }
+        marked.use({ extensions: [customMathExtension] });
+        inputArea.addEventListener('input', updatePreview);
 
         function updatePreview() {
             const markdownText = inputArea.value;
             if (!markdownText.trim()) {
-                previewArea.innerHTML = '<p class="text-gray-400 italic">Your document output will instantly show up cleanly formatted here...</p>';
+                previewArea.innerHTML = '<p class="text-gray-400 italic">Your formatted document structures will display live here...</p>';
                 return;
             }
-
-            let htmlContent = processMarkdownWithMath(markdownText);
-            previewArea.innerHTML = htmlContent;
-
-            // Run MathJax cleanly over the text nodes
+            previewArea.innerHTML = marked.parse(markdownText);
             if (window.MathJax && typeof window.MathJax.typesetPromise === 'function') {
                 window.MathJax.typesetPromise([previewArea]).catch((err) => console.log(err));
             }
@@ -151,40 +140,60 @@
             updatePreview();
         }
 
-        function copyToClipboard() {
-            if (!inputArea.value.trim()) return alert("Nothing to copy yet!");
-            
-            const selection = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(previewArea);
-            selection.removeAllRanges();
-            selection.addRange(range);
-
-            try {
-                document.execCommand('copy');
-                alert("Rich layout copied successfully! Paste directly into Word or Docs.");
-            } catch (err) {
-                alert("Oops, copy function failed.");
-            }
-            selection.removeAllRanges();
-        }
-
         function downloadAsDocx() {
             if (!inputArea.value.trim()) return alert("Please add content first before downloading!");
 
             const clone = previewArea.cloneNode(true);
-            
-            // Clean up MathJax rendered layout containers for native app reading
-            const mathjaxElements = clone.querySelectorAll('.MathJax');
-            mathjaxElements.forEach(el => {
-                const rawTex = el.getAttribute('aria-label');
-                if (rawTex) {
-                    const cleanSpan = document.createElement('span');
-                    cleanSpan.style.fontFamily = 'Cambria Math, Times New Roman';
-                    cleanSpan.innerText = ` ${rawTex} `;
-                    el.parentNode.replaceChild(cleanSpan, el);
+            const mathjaxContainers = clone.querySelectorAll('mjx-container');
+            const sourceContainers = previewArea.querySelectorAll('mjx-container');
+
+            for (let i = 0; i < mathjaxContainers.length; i++) {
+                const targetEl = mathjaxContainers[i];
+                const liveSvg = sourceContainers[i].querySelector('svg');
+                
+                if (liveSvg) {
+                    const svgNode = liveSvg.cloneNode(true);
+                    svgNode.removeAttribute('id');
+                    svgNode.removeAttribute('class');
+                    
+                    // Read original style height declarations from MathJax (e.g. "2.3ex")
+                    const rawWidth = liveSvg.getAttribute('width') || svgNode.style.width || "5ex";
+                    const rawHeight = liveSvg.getAttribute('height') || svgNode.style.height || "2ex";
+                    
+                    // Parse values out and convert text relative units ('ex') into clean, exact word document 'pt' layouts
+                    const numericWidth = parseFloat(rawWidth) || 5;
+                    const numericHeight = parseFloat(rawHeight) || 2;
+                    
+                    const calculatedPtWidth = Math.round(numericWidth * 7.5); 
+                    const calculatedPtHeight = Math.round(numericHeight * 7.5);
+
+                    // Overwrite the SVG root attributes completely so word processors cannot scale them out of bounds
+                    svgNode.setAttribute('width', calculatedPtWidth);
+                    svgNode.setAttribute('height', calculatedPtHeight);
+                    
+                    // Inject strict native attributes to hardcode the frame boundaries
+                    const svgString = new XMLSerializer().serializeToString(svgNode);
+                    const base64Svg = btoa(unescape(encodeURIComponent(svgString)));
+                    const imgDataUrl = 'data:image/svg+xml;base64,' + base64Svg;
+
+                    const imgTag = document.createElement('img');
+                    imgTag.src = imgDataUrl;
+                    imgTag.setAttribute('width', calculatedPtWidth);
+                    imgTag.setAttribute('height', calculatedPtHeight);
+                    imgTag.style.verticalAlign = 'middle';
+                    
+                    if (targetEl.getAttribute('display') === 'true') {
+                        const wrapperDiv = document.createElement('div');
+                        wrapperDiv.style.textAlign = 'center';
+                        wrapperDiv.style.margin = '12pt 0';
+                        wrapperDiv.appendChild(imgTag);
+                        targetEl.parentNode.replaceChild(wrapperDiv, targetEl);
+                    } else {
+                        imgTag.style.margin = '0 2px';
+                        targetEl.parentNode.replaceChild(imgTag, targetEl);
+                    }
                 }
-            });
+            }
 
             const scripts = clone.querySelectorAll('script, style');
             scripts.forEach(s => s.remove());
@@ -193,20 +202,15 @@
 
             const docStyles = `
                 <style>
-                    body { font-family: 'Calibri', 'Arial', sans-serif; font-size: 11pt; line-height: 1.5; color: #000000; }
+                    body { font-family: 'Calibri', 'Arial', sans-serif; font-size: 11pt; line-height: 1.6; color: #000000; }
                     h1 { font-family: 'Calibri Light', sans-serif; font-size: 18pt; font-weight: bold; color: #1F497D; margin-top: 12pt; margin-bottom: 6pt; }
                     h2 { font-family: 'Calibri Light', sans-serif; font-size: 14pt; font-weight: bold; color: #595959; margin-top: 12pt; margin-bottom: 4pt; }
                     h3 { font-family: 'Calibri Light', sans-serif; font-size: 12pt; font-weight: bold; color: #595959; margin-top: 6pt; margin-bottom: 2pt; }
-                    p { margin-bottom: 6pt; text-align: justify; }
-                    ul { margin-left: 20pt; list-style-type: disc; margin-bottom: 6pt; }
-                    ol { margin-left: 20pt; list-style-type: decimal; margin-bottom: 6pt; }
-                    li { margin-bottom: 3pt; }
-                    blockquote { border-left: 3pt solid #A6A6A6; padding-left: 10pt; color: #595959; margin: 10pt 0; font-style: italic; }
-                    table { width: 100%; border-collapse: collapse; margin: 12pt 0; }
-                    th, td { border: 1px solid #BFBFBF; padding: 6pt; text-align: left; font-size: 10.5pt; }
-                    th { background-color: #F2F2F2; font-weight: bold; }
-                    pre, code { font-family: 'Consolas', 'Courier New', monospace; font-size: 9.5pt; color: #000000; background-color: #F2F2F2; }
-                    pre { padding: 8pt; margin: 10pt 0; word-break: break-all; border: 1px solid #D9D9D9; }
+                    p { margin-bottom: 8pt; text-align: justify; }
+                    ul { margin-left: 20pt; list-style-type: disc; margin-bottom: 8pt; }
+                    ol { margin-left: 20pt; list-style-type: decimal; margin-bottom: 8pt; }
+                    li { margin-bottom: 4pt; }
+                    img { display: inline-block; max-width: 100%; }
                 </style>
             `;
 
@@ -227,7 +231,7 @@
             const url = URL.createObjectURL(blob);
             const downloadLink = document.createElement('a');
             downloadLink.href = url;
-            downloadLink.download = 'AI_Converted_Document.docx';
+            downloadLink.download = 'Clean_AI_Document.docx';
             
             document.body.appendChild(downloadLink);
             downloadLink.click();
